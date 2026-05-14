@@ -66,13 +66,3 @@ func newYorkLocation() *time.Location {
 	}
 	return loc
 }
-
-func shouldSuppressErrorNotification(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "No Form 4 filings found") ||
-		strings.Contains(msg, "No large insider transactions found") ||
-		strings.Contains(msg, "No valid CIKs found")
-}

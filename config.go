@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -68,30 +67,6 @@ func parseTickers(tickersArg string) []string {
 		}
 	}
 	return result
-}
-
-func int64ConfigValue(value *int64) string {
-	if value == nil {
-		return ""
-	}
-	return strconv.FormatInt(*value, 10)
-}
-
-func intConfigValue(value *int) string {
-	if value == nil {
-		return ""
-	}
-	return strconv.Itoa(*value)
-}
-
-func boolConfigValue(value *bool) string {
-	if value == nil {
-		return ""
-	}
-	if *value {
-		return "true"
-	}
-	return "false"
 }
 
 func loadSettings(settingsPath string) settings {

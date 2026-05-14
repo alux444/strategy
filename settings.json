@@ -1,6 +1,18 @@
 {
-  "tickers": ["msft", "nvda", "amd", "googl", "amzn", "meta", "team", "now", "snow", "mlys", "grab", "clov"],
-  "thresholdUsd": 10000,
+  "tickers": [],
+  "holdingsFile": "mid_and_large_market_tickers.csv",
+  "tickerMapFile": "tickermap",
+  "transactionsFile": "db/insider_transactions.db",
+  "notify": false,
+  "thresholdUsd": 200000,
   "lookbackDays": 1,
-  "debug": true
+  "secRequestDelayMs": 1000,
+  "secRetryCount": 1,
+  "secRetryBackoffMs": 5000,
+  "secRetryMaxBackoffMs": 120000,
+  "secUserAgent": "insider-tracker your-email@example.com",
+  "secContactEmail": "your-email@example.com",
+  "cacheDir": "history",
+  "debug": true,
+  "verbose": false
 }

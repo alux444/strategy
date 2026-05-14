@@ -9,6 +9,7 @@ type AlertEntry struct {
 	ownerName        string
 	position         string
 	typeLabel        string
+	transactionCode  string
 	shares           int64
 	price            float64
 	amount           float64
@@ -23,11 +24,23 @@ type MasterIndex struct {
 }
 
 type settings struct {
-	Tickers      []string `json:"tickers"`
-	ThresholdUSD *int64   `json:"thresholdUsd"`
-	LookbackDays *int     `json:"lookbackDays"`
-	Debug        *bool    `json:"debug"`
-	SettingsFile string   `json:"-"`
+	Tickers              []string `json:"tickers"`
+	HoldingsFile         string   `json:"holdingsFile"`
+	TickerMapFile        string   `json:"tickerMapFile"`
+	TransactionsFile     string   `json:"transactionsFile"`
+	Notify               *bool    `json:"notify"`
+	ThresholdUSD         *int64   `json:"thresholdUsd"`
+	LookbackDays         *int     `json:"lookbackDays"`
+	SECRequestDelayMS    *int     `json:"secRequestDelayMs"`
+	SECRetryCount        *int     `json:"secRetryCount"`
+	SECRetryBackoffMS    *int     `json:"secRetryBackoffMs"`
+	SECRetryMaxBackoffMS *int     `json:"secRetryMaxBackoffMs"`
+	SECUserAgent         string   `json:"secUserAgent"`
+	SECContactEmail      string   `json:"secContactEmail"`
+	CacheDir             string   `json:"cacheDir"`
+	Debug                *bool    `json:"debug"`
+	Verbose              *bool    `json:"verbose"`
+	SettingsFile         string   `json:"-"`
 }
 
 type flexibleText string

@@ -2,49 +2,97 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 )
 
+var secRequestDelay = 200 * time.Millisecond
+var secRetryCount = 3
+var secRetryBackoff = time.Second
+var secRetryMaxBackoff = 30 * time.Second
+var downloadCacheDir = "history"
+var secUserAgent = defaultSECUserAgent
+var secContactEmail = defaultSECContactEmail
+var errHTTPNotFound = errors.New("HTTP 404")
+
+func setSECRequestDelay(delay time.Duration) {
+	if delay < 0 {
+		delay = 0
+	}
+	secRequestDelay = delay
+}
+
+func setSECRetryPolicy(retryCount int, initialBackoff, maxBackoff time.Duration) {
+	if retryCount < 1 {
+		retryCount = 1
+	}
+	if initialBackoff < 0 {
+		initialBackoff = 0
+	}
+	if maxBackoff < initialBackoff {
+		maxBackoff = initialBackoff
+	}
+	secRetryCount = retryCount
+	secRetryBackoff = initialBackoff
+	secRetryMaxBackoff = maxBackoff
+}
+
+func setDownloadCacheDir(cacheDir string) {
+	downloadCacheDir = strings.TrimSpace(cacheDir)
+}
+
+func setSECIdentity(userAgent, contactEmail string) {
+	secUserAgent = firstNonBlank(userAgent, os.Getenv("SEC_USER_AGENT"), defaultSECUserAgent)
+	secContactEmail = firstNonBlank(contactEmail, os.Getenv("SEC_CONTACT_EMAIL"), defaultSECContactEmail)
+}
+
 func downloadText(rawURL string) (string, error) {
+	if cached, ok := readDownloadCache(rawURL); ok {
+		logTrace("Cache hit: " + rawURL)
+		return cached, nil
+	}
+
 	var lastErr error
-	for attempt := 1; attempt <= 3; attempt++ {
+	for attempt := 1; attempt <= secRetryCount; attempt++ {
+		if secRequestDelay > 0 {
+			time.Sleep(secRequestDelay)
+		}
+		logTrace(fmt.Sprintf("HTTP GET attempt %d/%d: %s", attempt, secRetryCount, rawURL))
 		ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 		if err != nil {
 			cancel()
 			return "", err
 		}
-		userAgent := firstNonBlank(os.Getenv("SEC_USER_AGENT"), defaultSECUserAgent)
-		contactEmail := firstNonBlank(os.Getenv("SEC_CONTACT_EMAIL"), defaultSECContactEmail)
-		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set("User-Agent", secUserAgent)
 		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-		req.Header.Set("From", contactEmail)
+		req.Header.Set("From", secContactEmail)
 
 		client := &http.Client{Timeout: httpTimeout}
 		resp, err := client.Do(req)
-		cancel()
 		if err != nil {
+			cancel()
 			lastErr = err
-			if attempt < 3 {
-				time.Sleep(time.Second)
-			}
+			sleepBeforeRetry(attempt, lastErr)
 			continue
 		}
 
 		body, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		cancel()
 		if readErr != nil {
 			lastErr = readErr
-			if attempt < 3 {
-				time.Sleep(time.Second)
-			}
+			sleepBeforeRetry(attempt, lastErr)
 			continue
 		}
 
@@ -53,20 +101,94 @@ func downloadText(rawURL string) (string, error) {
 			if len(body) == 0 {
 				return "", fmt.Errorf("empty response from %s", rawURL)
 			}
-			return string(body), nil
-		case http.StatusForbidden, http.StatusNotFound:
-			return "", fmt.Errorf("HTTP %d for %s", resp.StatusCode, rawURL)
+			if isSECRateLimitBody(string(body)) {
+				lastErr = fmt.Errorf("SEC rate limit response for %s (attempt %d)", rawURL, attempt)
+				sleepBeforeRetry(attempt, lastErr)
+				continue
+			}
+			text := string(body)
+			writeDownloadCache(rawURL, text)
+			return text, nil
+		case http.StatusNotFound:
+			return "", fmt.Errorf("%w for %s", errHTTPNotFound, rawURL)
+		case http.StatusForbidden, http.StatusTooManyRequests, http.StatusServiceUnavailable:
+			lastErr = fmt.Errorf("HTTP %d for %s (attempt %d)", resp.StatusCode, rawURL, attempt)
+			sleepBeforeRetry(attempt, lastErr)
 		default:
 			lastErr = fmt.Errorf("HTTP %d for %s (attempt %d)", resp.StatusCode, rawURL, attempt)
-			if attempt < 3 {
-				time.Sleep(2 * time.Second)
-			}
+			sleepBeforeRetry(attempt, lastErr)
 		}
 	}
 	if lastErr != nil {
 		return "", lastErr
 	}
-	return "", fmt.Errorf("failed to download %s after 3 attempts", rawURL)
+	return "", fmt.Errorf("failed to download %s after %d attempts", rawURL, secRetryCount)
+}
+
+func readDownloadCache(rawURL string) (string, bool) {
+	if strings.TrimSpace(downloadCacheDir) == "" {
+		return "", false
+	}
+	contentPath, _ := downloadCachePaths(rawURL)
+	content, err := os.ReadFile(contentPath)
+	if err != nil || len(content) == 0 {
+		return "", false
+	}
+	if isSECRateLimitBody(string(content)) {
+		logTrace("Ignoring cached SEC block page: " + rawURL)
+		_ = os.Remove(contentPath)
+		return "", false
+	}
+	return string(content), true
+}
+
+func writeDownloadCache(rawURL, content string) {
+	if strings.TrimSpace(downloadCacheDir) == "" || strings.TrimSpace(content) == "" || isSECRateLimitBody(content) {
+		return
+	}
+	contentPath, urlPath := downloadCachePaths(rawURL)
+	if err := os.MkdirAll(filepath.Dir(contentPath), 0755); err != nil {
+		logTrace(fmt.Sprintf("Failed to create cache dir %s: %v", filepath.Dir(contentPath), err))
+		return
+	}
+	if err := os.WriteFile(contentPath, []byte(content), 0644); err != nil {
+		logTrace(fmt.Sprintf("Failed to write cache file %s: %v", contentPath, err))
+		return
+	}
+	_ = os.WriteFile(urlPath, []byte(rawURL+"\n"), 0644)
+}
+
+func downloadCachePaths(rawURL string) (string, string) {
+	sum := sha256.Sum256([]byte(rawURL))
+	key := hex.EncodeToString(sum[:])
+	return filepath.Join(downloadCacheDir, key+".body"), filepath.Join(downloadCacheDir, key+".url")
+}
+
+func sleepBeforeRetry(attempt int, err error) {
+	if attempt >= secRetryCount {
+		return
+	}
+	delay := secRetryBackoff
+	for i := 1; i < attempt; i++ {
+		delay *= 2
+		if delay >= secRetryMaxBackoff {
+			delay = secRetryMaxBackoff
+			break
+		}
+	}
+	if delay > 0 {
+		logDebug(fmt.Sprintf("%v; backing off for %s before retry %d/%d", err, delay, attempt+1, secRetryCount))
+		time.Sleep(delay)
+	}
+}
+
+func isSECRateLimitBody(body string) bool {
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "request rate threshold exceeded") ||
+		strings.Contains(lower, "undeclared automated tool") ||
+		strings.Contains(lower, "please declare your traffic") ||
+		strings.Contains(lower, "automated access to our sites must comply") ||
+		strings.Contains(lower, "current guidelines limit users")
 }
 
 func findMasterIndex(startDate time.Time, maxLookbackDays int) *MasterIndex {
@@ -120,7 +242,7 @@ func parseMasterIdx(content string, ciks map[string]struct{}) []string {
 		}
 		fileCIK := normalizeCIK(strings.TrimSpace(parts[0]))
 		formType := strings.TrimSpace(parts[2])
-		if !strings.HasPrefix(formType, "4") {
+		if !isForm4Type(formType) {
 			continue
 		}
 		if _, ok := cleanCiks[fileCIK]; ok {
@@ -137,20 +259,51 @@ func parseMasterIdx(content string, ciks map[string]struct{}) []string {
 	return urls
 }
 
+func isForm4Type(formType string) bool {
+	normalized := strings.ToUpper(strings.TrimSpace(formType))
+	return normalized == "4" || normalized == "4/A"
+}
+
 func downloadTickerMapping() map[string]string {
 	mapping := make(map[string]string)
 	content, err := downloadText(tickerURL)
 	if err == nil && strings.TrimSpace(content) != "" {
-		for _, line := range strings.Split(content, "\n") {
-			parts := strings.Split(strings.TrimSpace(line), "\t")
-			if len(parts) == 2 {
-				mapping[strings.ToUpper(strings.TrimSpace(parts[0]))] = strings.TrimSpace(parts[1])
-			}
-		}
+		mapping = parseTickerMappingContent(content)
 	}
+
+	logDebug(fmt.Sprintf("Loaded %d SEC ticker mappings from %s", len(mapping), tickerURL))
 	if len(mapping) == 0 {
 		for k, v := range fallbackTickerMap {
 			mapping[k] = v
+		}
+		logDebug(fmt.Sprintf("Using %d fallback ticker mappings", len(mapping)))
+	}
+	return mapping
+}
+
+func loadTickerMappingFromFile(filePath string) (map[string]string, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	mapping := parseTickerMappingContent(string(content))
+	if len(mapping) == 0 {
+		return nil, fmt.Errorf("no ticker mappings found in %s", filePath)
+	}
+	return mapping, nil
+}
+
+func parseTickerMappingContent(content string) map[string]string {
+	mapping := make(map[string]string)
+	for _, line := range strings.Split(content, "\n") {
+		parts := strings.Fields(strings.TrimSpace(line))
+		if len(parts) != 2 {
+			continue
+		}
+		ticker := normalizeTickerSymbol(parts[0])
+		cik := sanitizeNumeric(parts[1])
+		if ticker != "" && cik != "" {
+			mapping[ticker] = cik
 		}
 	}
 	return mapping
@@ -186,7 +339,7 @@ func normalizeCIK(cik string) string {
 	return normalized
 }
 
-func fetchForm4URLsFromEdgarBrowse(ciks map[string]struct{}, maxLookbackDays int) []string {
+func fetchForm4URLsFromEdgarBrowse(ciks map[string]struct{}, endDate time.Time, maxLookbackDays int) []string {
 	urls := make([]string, 0)
 	seen := make(map[string]struct{})
 	for cik := range ciks {
@@ -196,7 +349,7 @@ func fetchForm4URLsFromEdgarBrowse(ciks map[string]struct{}, maxLookbackDays int
 			fmt.Fprintf(os.Stderr, "Warning: browse-edgar fallback failed for CIK %s\n", cik)
 			continue
 		}
-		for _, u := range parseBrowseEdgarAtom(atomXML, maxLookbackDays) {
+		for _, u := range parseBrowseEdgarAtom(atomXML, endDate, maxLookbackDays) {
 			if _, exists := seen[u]; !exists {
 				seen[u] = struct{}{}
 				urls = append(urls, u)
@@ -206,10 +359,12 @@ func fetchForm4URLsFromEdgarBrowse(ciks map[string]struct{}, maxLookbackDays int
 	return urls
 }
 
-func parseBrowseEdgarAtom(atomXML string, maxLookbackDays int) []string {
+func parseBrowseEdgarAtom(atomXML string, endDate time.Time, maxLookbackDays int) []string {
 	urls := make([]string, 0)
 	seen := make(map[string]struct{})
-	threshold := time.Now().In(newYorkLocation()).Truncate(24*time.Hour).AddDate(0, 0, -maxLookbackDays)
+	ny := newYorkLocation()
+	end := endDate.In(ny).Truncate(24 * time.Hour)
+	threshold := end.AddDate(0, 0, -maxLookbackDays)
 	entryPattern := regexp.MustCompile(`(?is)<entry>(.*?)</entry>`)
 	datePattern := regexp.MustCompile(`(?is)<filing-date>(.*?)</filing-date>`)
 	hrefPattern := regexp.MustCompile(`(?is)<filing-href>(.*?)</filing-href>`)
@@ -231,7 +386,7 @@ func parseBrowseEdgarAtom(atomXML string, maxLookbackDays int) []string {
 			logTrace(fmt.Sprintf("Atom entry date parse failed: %s -> %v", filingDate, err))
 			continue
 		}
-		keep := !parsedDate.Before(threshold)
+		keep := !parsedDate.Before(threshold) && !parsedDate.After(end)
 		logTrace(fmt.Sprintf("Atom entry decision: parsed=%s threshold=%s keep=%t", parsedDate.Format("2006-01-02"), threshold.Format("2006-01-02"), keep))
 		if !keep {
 			continue

@@ -51,15 +51,15 @@ var fallbackTickerMap = map[string]string{
 	"ZTS":   "0001555285",
 }
 
-// Types and XML structs moved to types.go
-
-// SEC helper functions moved to sec.go
-
 func parseForm4(rawXML string, minimumUSD int64, cikToRequestedTicker map[string]string) (map[string][]AlertEntry, error) {
 	alerts := make(map[string][]AlertEntry)
 	xmlPayload := extractXMLPayload(rawXML)
 	if strings.TrimSpace(xmlPayload) == "" {
 		logDebug("Skipping file: Could not extract valid XML payload.")
+		return alerts, nil
+	}
+	if !strings.Contains(xmlPayload, "<ownershipDocument") {
+		logTrace("Skipping file: XML payload is not an ownershipDocument.")
 		return alerts, nil
 	}
 
@@ -181,6 +181,7 @@ func processTransaction(tx nonDerivativeTransaction, ownerName, position string,
 		ownerName:        ownerName,
 		position:         position,
 		typeLabel:        typeLabel,
+		transactionCode:  code,
 		shares:           shares,
 		price:            price,
 		amount:           amount,
@@ -220,13 +221,6 @@ func sanitizeNumeric(text string) string {
 		}
 	}
 	return b.String()
-}
-
-func extractText(value flexibleText, fallback string) string {
-	if strings.TrimSpace(value.String()) != "" {
-		return strings.TrimSpace(value.String())
-	}
-	return fallback
 }
 
 func extractXMLPayload(rawText string) string {
@@ -360,21 +354,6 @@ func sendNotification(message string) bool {
 	return false
 }
 
-func sendErrorNotification(errorMessage string) {
-	dingTalkURL := os.Getenv("DING_WEBHOOK_URL")
-	if strings.TrimSpace(dingTalkURL) != "" {
-		dingTalkSecret := os.Getenv("DING_WEBHOOK_SIGN")
-		_ = sendDingTalkWebhook(dingTalkURL, dingTalkSecret, "Insider Bot Error", errorMessage)
-		return
-	}
-
-	// discordURL := os.Getenv("DISCORD_WEBHOOK_URL")
-	// if strings.TrimSpace(discordURL) != "" {
-	// 	_ = sendDiscordWebhook(discordURL, "Insider Bot Error", errorMessage)
-	// }
-	log.Println(errorMessage)
-}
-
 func sendDingTalkWebhook(webhookURL, secret, title, message string) bool {
 	signedURL, err := buildDingTalkURL(webhookURL, secret)
 	if err != nil {
@@ -423,72 +402,6 @@ func buildDingTalkURL(webhookURL, secret string) (string, error) {
 	return fmt.Sprintf("%s%stimestamp=%d&sign=%s", webhookURL, sep, timestamp, sign), nil
 }
 
-func sendDiscordWebhook(webhookURL, title, message string) bool {
-	if err := sendDiscordMessages(webhookURL, title, message); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to send Discord notification: %v\n", err)
-		return false
-	}
-	return true
-}
-
-func sendDiscordMessages(webhookURL, title, message string) error {
-	titleLine := "**" + title + "**\n"
-	fullBody := titleLine + message
-	if len(escapeJSON(fullBody)) <= 2000 {
-		return sendSingleDiscordMessage(webhookURL, fullBody)
-	}
-
-	lines := strings.Split(fullBody, "\n")
-	var chunk strings.Builder
-	for _, line := range lines {
-		candidate := chunk.String()
-		if candidate != "" {
-			candidate += "\n"
-		}
-		candidate += line
-		if len(escapeJSON(candidate)) <= 2000 {
-			if chunk.Len() > 0 {
-				chunk.WriteString("\n")
-			}
-			chunk.WriteString(line)
-			continue
-		}
-		if chunk.Len() > 0 {
-			if err := sendSingleDiscordMessage(webhookURL, chunk.String()); err != nil {
-				return err
-			}
-			chunk.Reset()
-		}
-		chunk.WriteString(line)
-	}
-	if chunk.Len() > 0 {
-		if err := sendSingleDiscordMessage(webhookURL, chunk.String()); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func sendSingleDiscordMessage(webhookURL, content string) error {
-	payload := fmt.Sprintf(`{"content":"%s"}`, escapeJSON(content))
-	client := &http.Client{Timeout: httpTimeout}
-	req, err := http.NewRequest(http.MethodPost, webhookURL, strings.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("discord webhook returned status %d: %s", resp.StatusCode, string(body))
-	}
-	return nil
-}
-
 func escapeJSON(value string) string {
 	value = strings.ReplaceAll(value, "\\", "\\\\")
 	value = strings.ReplaceAll(value, "\"", "\\\"")
@@ -503,14 +416,26 @@ func main() {
 	opts := parseOptions(os.Args[1:])
 	settingsFile := firstNonBlank(opts["settings"], opts["config"], "")
 	cfg := loadSettings(settingsFile)
+	configureSECFromSettings(opts, cfg)
 
 	// Determine tickers
 	tickersArg := firstNonBlank(opts["tickers"], joinTickers(cfg.Tickers))
-	if tickersArg == "" {
-		fmt.Fprintln(os.Stderr, "No tickers configured. Use --tickers or settings.json.")
+	var tickers []string
+	if tickersArg != "" {
+		tickers = parseTickers(tickersArg)
+	} else if filePath := firstNonBlank(opts["holdings-file"], cfg.HoldingsFile); filePath != "" {
+		loaded, err := readTickersFromCSV(filePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to load holdings file %s: %v\n", filePath, err)
+			os.Exit(1)
+		}
+		tickers = loaded
+	}
+	if len(tickers) == 0 {
+		fmt.Fprintln(os.Stderr, "No tickers configured. Use --tickers, settings.json tickers, or holdingsFile.")
 		os.Exit(1)
 	}
-	tickers := parseTickers(tickersArg)
+	fmt.Println("Loaded " + strconv.Itoa(len(tickers)) + " tickers to monitor.")
 
 	// Debug flags
 	if cfg.Debug != nil {
@@ -518,6 +443,8 @@ func main() {
 	}
 	if v, ok := opts["verbose"]; ok && (v == "true" || v == "1") {
 		setVerbose(true)
+	} else if cfg.Verbose != nil {
+		setVerbose(*cfg.Verbose)
 	}
 
 	// Thresholds
@@ -541,7 +468,11 @@ func main() {
 		}
 	}
 
-	tickerMap := downloadTickerMapping()
+	tickerMap, err := mainTickerMapping(opts, cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	ciks := make(map[string]struct{})
 	cikToRequested := make(map[string]string)
 	for _, t := range tickers {
@@ -569,7 +500,7 @@ func main() {
 	}
 	if len(formURLs) == 0 {
 		// Fallback to browse-edgar
-		formURLs = fetchForm4URLsFromEdgarBrowse(ciks, lookback)
+		formURLs = fetchForm4URLsFromEdgarBrowse(ciks, time.Now().In(newYorkLocation()), lookback)
 	}
 
 	alertsByTicker := make(map[string][]AlertEntry)
@@ -590,6 +521,25 @@ func main() {
 			}
 			alertsByTicker[k] = append(alertsByTicker[k], v...)
 		}
+	}
+
+	transactionsFile := firstNonBlank(opts["transactions-file"], opts["db"], cfg.TransactionsFile, defaultTransactionsFile)
+	written, err := appendTransactionRecords(transactionsFile, alertsByTicker, todayScanDate())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to record transactions: %v\n", err)
+	} else {
+		logDebug(fmt.Sprintf("Recorded %d new transactions to %s", written, transactionsFile))
+	}
+
+	notify := true
+	if cfg.Notify != nil {
+		notify = *cfg.Notify
+	}
+	if v := firstNonBlank(opts["notify"], ""); v != "" {
+		notify = parseBool(v, notify)
+	}
+	if !notify {
+		return
 	}
 
 	// Build and send notification
