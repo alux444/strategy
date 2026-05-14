@@ -1,0 +1,6 @@
+{
+  "tickers": ["msft", "nvda", "amd", "googl", "amzn", "meta", "team", "now", "snow", "mlys", "grab", "clov"],
+  "thresholdUsd": 10000,
+  "lookbackDays": 1,
+  "debug": true
+}
