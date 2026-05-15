@@ -14,6 +14,12 @@ By default it reads `settings.json`, scans the configured universe for today's f
 history/insider_transactions.db
 ```
 
+Each successful run also appends a timestamped summary line to:
+
+```txt
+db/ingest_runs.txt
+```
+
 ## Universe
 
 Use `holdingsFile` in `settings.json` for the broad mid-market company list. The file can be a simple CSV or one ticker per line. Example:

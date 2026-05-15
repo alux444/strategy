@@ -13,6 +13,7 @@ import (
 )
 
 const defaultTransactionsFile = "history/insider_transactions.db"
+const defaultIngestLogFile = "db/ingest_runs.txt"
 
 type transactionRecord struct {
 	ID               string  `json:"id"`
@@ -111,6 +112,21 @@ func appendTransactionRecords(filePath string, alertsByTicker map[string][]Alert
 		return written, err
 	}
 	return written, nil
+}
+
+func appendIngestRunLog(filePath string, written int, transactionsFile string) error {
+	filePath = firstNonBlank(filePath, defaultIngestLogFile)
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	stamp := time.Now().In(newYorkLocation()).Format("2006-01-02 15:04:05 MST")
+	_, err = fmt.Fprintf(f, "%s Recorded %d new transactions to %s\n", stamp, written, transactionsFile)
+	return err
 }
 
 func buildTransactionRecord(ticker string, entry AlertEntry, scanDate string) transactionRecord {

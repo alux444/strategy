@@ -529,6 +529,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Warning: failed to record transactions: %v\n", err)
 	} else {
 		logDebug(fmt.Sprintf("Recorded %d new transactions to %s", written, transactionsFile))
+		ingestLogFile := firstNonBlank(opts["ingest-log-file"], cfg.IngestLogFile, defaultIngestLogFile)
+		if logErr := appendIngestRunLog(ingestLogFile, written, transactionsFile); logErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to append ingest log: %v\n", logErr)
+		}
 	}
 
 	notify := true

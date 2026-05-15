@@ -28,6 +28,7 @@ type settings struct {
 	HoldingsFile         string   `json:"holdingsFile"`
 	TickerMapFile        string   `json:"tickerMapFile"`
 	TransactionsFile     string   `json:"transactionsFile"`
+	IngestLogFile        string   `json:"ingestLogFile"`
 	Notify               *bool    `json:"notify"`
 	ThresholdUSD         *int64   `json:"thresholdUsd"`
 	LookbackDays         *int     `json:"lookbackDays"`

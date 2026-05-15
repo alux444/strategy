@@ -3,6 +3,7 @@
   "holdingsFile": "mid_and_large_market_tickers.csv",
   "tickerMapFile": "tickermap",
   "transactionsFile": "db/insider_transactions.db",
+  "ingestLogFile": "db/ingest_runs.txt",
   "notify": false,
   "thresholdUsd": 200000,
   "lookbackDays": 0,
