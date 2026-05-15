@@ -23,7 +23,7 @@ const (
 	defaultSECUserAgent    = "SEC-Insider-Bot AdminContact@example.com"
 	defaultSECContactEmail = "contact@example.com"
 	defaultMinimumUSD      = int64(500_000)
-	defaultMaxLookbackDays = 1
+	defaultMaxLookbackDays = 0
 	defaultDebug           = true
 	defaultSettingsFile    = "settings.json"
 )
@@ -463,7 +463,7 @@ func main() {
 		lookback = *cfg.LookbackDays
 	}
 	if v, ok := opts["lookback"]; ok && v != "" {
-		if p := parseInt(v, lookback); p > 0 {
+		if p := parseInt(v, lookback); p >= 0 {
 			lookback = p
 		}
 	}

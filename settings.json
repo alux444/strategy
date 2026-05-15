@@ -5,7 +5,7 @@
   "transactionsFile": "db/insider_transactions.db",
   "notify": false,
   "thresholdUsd": 200000,
-  "lookbackDays": 1,
+  "lookbackDays": 0,
   "secRequestDelayMs": 1000,
   "secRetryCount": 1,
   "secRetryBackoffMs": 5000,

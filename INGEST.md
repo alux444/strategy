@@ -1,6 +1,6 @@
 # Daily Insider Ingest
 
-The default `go run .` path is now the broad daily scraper. Its job is to collect significant insider transactions into an append-only local JSONL dataset, not decide whether a strategy is attractive.
+The default `go run .` path is now the broad same-day scraper. Its job is to collect significant insider transactions from today into an append-only local SQLite dataset, not decide whether a strategy is attractive.
 
 ## Run
 
@@ -8,10 +8,10 @@ The default `go run .` path is now the broad daily scraper. Its job is to collec
 go run .
 ```
 
-By default it reads `settings.json`, scans the configured universe, and writes new transactions to:
+By default it reads `settings.json`, scans the configured universe for today's filings only, and writes new transactions to:
 
 ```txt
-history/insider_transactions.jsonl
+history/insider_transactions.db
 ```
 
 ## Universe
@@ -50,7 +50,9 @@ Each JSONL row contains:
 - 10b5-1 flag
 - shares owned after
 
-Rows are de-duped by ticker, owner, date, transaction code, shares, price, and amount, so overlapping lookback windows should not duplicate old records.
+Rows are de-duped by ticker, owner, date, transaction code, shares, price, and amount.
+
+If you want to widen the window, pass a positive `lookback` value explicitly.
 
 ## Notifications
 
