@@ -1,6 +1,6 @@
 # Insider purchase shortlist
 
-Run `go run .` to collect significant Form 4 transactions across all issuers and generate a ranked research shortlist. The default scan covers today and the previous seven New York calendar days. Daily indexes become available overnight, so the report is not a live filing feed.
+Run `go run .` to collect significant Form 4 transactions across all issuers and generate a ranked research shortlist. The default scan starts with yesterday and looks back seven New York calendar days. It uses SEC directory listings to download only published daily indexes. Today and other unpublished dates are excluded. Daily indexes become available overnight, so the report is not a live filing feed.
 
 ## What gets saved
 
@@ -73,9 +73,17 @@ Alternatively set `allIssuers` to false to use `holdingsFile`. Restricted scans 
 
 ## Collection reliability
 
-Requests are sequential with a one-second delay by default and up to four attempts. SEC blocks stop further discovery or filing downloads after the current request exhausts its retries. Daily indexes and browse feeds bypass the permanent cache; filing bodies remain cached. New York dates use calendar midnight, including daylight saving changes.
+For a small live access check before a broad scan:
 
-Unavailable indexes return 404 for dates such as today before publication and market holidays; those dates are skipped and retried by later overlapping runs. Failed requests and invalid filing/index payloads remain visible. Partial collection writes its available evidence and a report containing `collectionWarnings`, exits unsuccessfully, and suppresses notifications and the successful-run log. A failure to retrieve any daily index exits before recording a successful run.
+```sh
+go run . --check-sec --verbose=true
+```
+
+This reads the published directory listing, fetches the latest available index in the previous eight calendar days, and checks one Form 4 filing. It validates the real SEC header and ownership XML, bypasses the cache, and writes no database records. If an index contains no Form 4 filings, it reports that filing access was not checked.
+
+Requests are sequential with a one-second delay by default and up to four attempts for transient failures. HTTP 403/429 and recognized SEC block pages stop the current request and further discovery or filing downloads immediately. A 403 alone does not establish whether the URL is unavailable or access from the host is restricted. Daily indexes and browse feeds bypass the permanent cache; filing bodies remain cached. New York dates use calendar midnight, including daylight saving changes.
+
+Dates absent from the published directory listing, including holidays, are skipped without requesting nonexistent index URLs. An advertised index that fails to download is reported as a collection failure. Failed requests and invalid filing/index payloads remain visible. Partial collection writes its available evidence and a report containing `collectionWarnings`, exits unsuccessfully, and suppresses notifications and the successful-run log. A failure to retrieve any daily index exits before recording a successful run.
 
 Overlaps cover ordinary missed runs, not unlimited downtime. Increase `--lookback` after a longer outage. The SEC documents its [daily index publication schedule and fair-access rules](https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data).
 

@@ -17,6 +17,9 @@ func runTracker(opts map[string]string, cfg settings, downloader filingDownloade
 	verbose := cfg.Verbose != nil && *cfg.Verbose
 	setVerbose(parseBool(opts["verbose"], verbose))
 	configureSECFromSettings(opts, cfg)
+	if parseBool(opts["check-sec"], false) {
+		return checkSECAccess(downloader, now, output)
+	}
 	databasePath := firstNonBlank(opts["transactions-file"], opts["db"], cfg.TransactionsFile, defaultTransactionsFile)
 	failures := []string{}
 	if !parseBool(opts["report-only"], false) {
@@ -47,6 +50,41 @@ func runTracker(opts map[string]string, cfg settings, downloader filingDownloade
 	if parseBool(opts["notify"], notify) && !parseBool(opts["report-only"], false) && len(report.Leads) > 0 {
 		sendNotification(summary)
 	}
+	return nil
+}
+
+func checkSECAccess(downloader filingDownloader, now time.Time, output io.Writer) error {
+	date := newYorkDay(now).AddDate(0, 0, -1)
+	listing := discoverPublishedIndexes(downloader, date.AddDate(0, 0, -defaultMaxLookbackDays), date)
+	if listing.Blocked {
+		return fmt.Errorf("SEC access check failed: %w: %s", errSECBlocked, strings.Join(listing.Failures, "; "))
+	}
+	if len(listing.Failures) > 0 || len(listing.URLs) == 0 {
+		return fmt.Errorf("SEC access check: no usable published index: %s", strings.Join(listing.Failures, "; "))
+	}
+	indexURL := listing.URLs[0]
+	fmt.Fprintf(output, "Checking latest published SEC index: %s\n", indexURL)
+	content, err := downloader.DownloadText(indexURL)
+	if err != nil {
+		return fmt.Errorf("SEC access check failed: %w", err)
+	}
+	if !isMasterIndex(content) {
+		return fmt.Errorf("SEC access check: response is not a master index: %s", indexURL)
+	}
+	filingURLs := parseMasterIdx(content, nil)
+	fmt.Fprintf(output, "Index OK: %d distinct Form 4 filings.\n", len(filingURLs))
+	if len(filingURLs) == 0 {
+		fmt.Fprintln(output, "No Form 4 filings in this index; filing download access was not checked. No database changes.")
+		return nil
+	}
+	payload, err := downloader.DownloadText(filingURLs[0])
+	if err != nil {
+		return fmt.Errorf("SEC filing access check failed: %w", err)
+	}
+	if _, err := parseForm4WithThresholds(payload, defaultMinimumBuyUSD, minimumLargeBuyUSD, nil); err != nil {
+		return fmt.Errorf("SEC filing parse check failed: %w", err)
+	}
+	fmt.Fprintln(output, "Filing download and ownership XML parsing OK. No database changes.")
 	return nil
 }
 

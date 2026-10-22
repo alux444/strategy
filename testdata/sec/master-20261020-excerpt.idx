@@ -1,0 +1,10 @@
+Description:           Daily Index of EDGAR Dissemination Feed
+Last Data Received:    Oct 20, 2026
+Comments:              webmaster@sec.gov
+Anonymous FTP:         ftp://ftp.sec.gov/edgar/
+
+CIK|Company Name|Form Type|Date Filed|File Name
+--------------------------------------------------------------------------------
+1007549|SOLCHER STEPHEN B|4|20261020|edgar/data/1007549/0001007549-26-000010.txt
+100885|UNION PACIFIC CORP|4|20261020|edgar/data/100885/0000100885-26-000312.txt
+100885|UNION PACIFIC CORP|4|20261020|edgar/data/100885/0000100885-26-000313.txt

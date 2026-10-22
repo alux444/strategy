@@ -54,10 +54,12 @@ type filingDownloader interface {
 	DownloadText(rawURL string) (string, error)
 }
 
-type secDownloader struct{}
+type secDownloader struct {
+	Fresh bool
+}
 
-func (secDownloader) DownloadText(rawURL string) (string, error) {
-	return downloadText(rawURL)
+func (downloader secDownloader) DownloadText(rawURL string) (string, error) {
+	return downloadSECText(rawURL, !downloader.Fresh)
 }
 
 type filingScan struct {

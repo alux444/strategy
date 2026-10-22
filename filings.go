@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -49,28 +51,24 @@ func resolveUniverse(opts map[string]string, cfg settings) (tickerUniverse, erro
 }
 
 func scanFilingIndexes(downloader filingDownloader, universe tickerUniverse, now time.Time, lookback int) filingScan {
-	scan := filingScan{URLs: []string{}, Failures: []string{}}
+	end := newYorkDay(now).AddDate(0, 0, -1)
+	listing := discoverPublishedIndexes(downloader, end.AddDate(0, 0, -lookback), end)
+	scan := filingScan{URLs: []string{}, Failures: listing.Failures, Blocked: listing.Blocked}
+	if scan.Blocked {
+		return scan
+	}
 	seen := make(map[string]struct{})
-	end := newYorkDay(now)
-	for date := end; !date.Before(end.AddDate(0, 0, -lookback)); date = date.AddDate(0, 0, -1) {
-		if date.Weekday() == time.Saturday || date.Weekday() == time.Sunday {
-			continue
-		}
-		quarter := (int(date.Month())-1)/3 + 1
-		indexURL := fmt.Sprintf("%sedgar/daily-index/%d/QTR%d/master.%s.idx", secBase, date.Year(), quarter, date.Format("20060102"))
+	for _, indexURL := range listing.URLs {
 		content, err := downloader.DownloadText(indexURL)
-		if errors.Is(err, errHTTPNotFound) {
-			continue
-		}
 		if err != nil {
-			scan.Failures = append(scan.Failures, fmt.Sprintf("index %s: %v", date.Format("2006-01-02"), err))
+			scan.Failures = append(scan.Failures, fmt.Sprintf("index %s: %v", indexURL, err))
 			if errors.Is(err, errSECBlocked) {
 				scan.Blocked = true
 				return scan
 			}
 			continue
 		}
-		if !strings.Contains(content, "CIK|Company Name|Form Type|Date Filed|Filename") {
+		if !isMasterIndex(content) {
 			scan.Failures = append(scan.Failures, "invalid master index: "+indexURL)
 			continue
 		}
@@ -88,6 +86,91 @@ func scanFilingIndexes(downloader filingDownloader, universe tickerUniverse, now
 		}
 	}
 	return scan
+}
+
+func masterIndexDirectoryURL(date time.Time) string {
+	quarter := (int(date.Month())-1)/3 + 1
+	return fmt.Sprintf("%sedgar/daily-index/%d/QTR%d/", secBase, date.Year(), quarter)
+}
+
+type publishedIndexes struct {
+	URLs     []string
+	Failures []string
+	Blocked  bool
+}
+
+type secDirectoryListing struct {
+	Directory *secDirectory `json:"directory"`
+}
+
+type secDirectory struct {
+	Items []secDirectoryItem `json:"item"`
+}
+
+type secDirectoryItem struct {
+	Name string `json:"name"`
+}
+
+func discoverPublishedIndexes(downloader filingDownloader, start, end time.Time) publishedIndexes {
+	listing := publishedIndexes{URLs: []string{}, Failures: []string{}}
+	seenDirectories := make(map[string]struct{})
+	for date := end; !date.Before(start); date = date.AddDate(0, 0, -1) {
+		directoryURL := masterIndexDirectoryURL(date)
+		if _, seen := seenDirectories[directoryURL]; seen {
+			continue
+		}
+		seenDirectories[directoryURL] = struct{}{}
+		content, err := downloader.DownloadText(directoryURL + "index.json")
+		if err != nil {
+			listing.Failures = append(listing.Failures, fmt.Sprintf("directory %s: %v", directoryURL, err))
+			if errors.Is(err, errSECBlocked) {
+				listing.Blocked = true
+				return listing
+			}
+			continue
+		}
+		urls, err := publishedMasterIndexURLs(content, directoryURL, start, end)
+		if err != nil {
+			listing.Failures = append(listing.Failures, fmt.Sprintf("directory %s: %v", directoryURL, err))
+			continue
+		}
+		listing.URLs = append(listing.URLs, urls...)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(listing.URLs)))
+	return listing
+}
+
+func publishedMasterIndexURLs(content, directoryURL string, start, end time.Time) ([]string, error) {
+	var listing secDirectoryListing
+	if err := json.Unmarshal([]byte(content), &listing); err != nil {
+		return nil, err
+	}
+	if listing.Directory == nil {
+		return nil, fmt.Errorf("response is not a SEC directory listing")
+	}
+	seen := make(map[string]struct{})
+	for _, item := range listing.Directory.Items {
+		if !strings.HasPrefix(item.Name, "master.") || !strings.HasSuffix(item.Name, ".idx") {
+			continue
+		}
+		dateText := strings.TrimSuffix(strings.TrimPrefix(item.Name, "master."), ".idx")
+		date, err := time.ParseInLocation("20060102", dateText, newYorkLocation())
+		if err != nil || date.Before(start) || date.After(end) {
+			continue
+		}
+		seen[directoryURL+item.Name] = struct{}{}
+	}
+	return sortedKeys(seen), nil
+}
+
+func isMasterIndex(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		normalized := strings.ToLower(strings.Join(strings.Fields(line), ""))
+		if normalized == "cik|companyname|formtype|datefiled|filename" {
+			return true
+		}
+	}
+	return false
 }
 
 func collectFilingTransactions(downloader filingDownloader, scan filingScan, universe tickerUniverse, minimumBuyUSD, minimumSellUSD int64) (map[string][]AlertEntry, []string) {

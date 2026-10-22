@@ -19,6 +19,9 @@ const testMasterIndex = "CIK|Company Name|Form Type|Date Filed|Filename\n" +
 	"1|Test Company|4|2026-10-20|edgar/data/1/second.txt\n" +
 	"1|Test Company|10-K|2026-10-20|edgar/data/1/annual.txt\n"
 
+const testMasterDirectoryURL = secBase + "edgar/daily-index/2026/QTR4/index.json"
+const testMasterDirectory = `{"directory":{"item":[{"name":"master.20261020.idx"}]}}`
+
 type memoryDownloader struct {
 	responses map[string]string
 	failures  map[string]error
@@ -38,10 +41,10 @@ func (downloader *memoryDownloader) DownloadText(rawURL string) (string, error) 
 
 func TestAllIssuerDiscoveryAndCorrectNewYorkDate(t *testing.T) {
 	indexURL := secBase + "edgar/daily-index/2026/QTR4/master.20261020.idx"
-	downloader := &memoryDownloader{responses: map[string]string{indexURL: testMasterIndex}}
-	now := time.Date(2026, time.October, 21, 1, 0, 0, 0, time.UTC)
+	downloader := &memoryDownloader{responses: map[string]string{testMasterDirectoryURL: testMasterDirectory, indexURL: testMasterIndex}}
+	now := time.Date(2026, time.October, 22, 1, 0, 0, 0, time.UTC)
 	scan := scanFilingIndexes(downloader, tickerUniverse{AllIssuers: true}, now, 0)
-	if scan.IndexCount != 1 || len(scan.URLs) != 2 || len(scan.Failures) != 0 || downloader.requests[0] != indexURL {
+	if scan.IndexCount != 1 || len(scan.URLs) != 2 || len(scan.Failures) != 0 || downloader.requests[1] != indexURL {
 		t.Fatalf("bad scan: %+v, requests=%v", scan, downloader.requests)
 	}
 	if len(parseMasterIdx(testMasterIndex, map[string]struct{}{"999": {}})) != 0 {
@@ -50,9 +53,8 @@ func TestAllIssuerDiscoveryAndCorrectNewYorkDate(t *testing.T) {
 }
 
 func TestRateLimitStopsRequestsAndFailuresRemainVisible(t *testing.T) {
-	indexURL := secBase + "edgar/daily-index/2026/QTR4/master.20261020.idx"
-	downloader := &memoryDownloader{failures: map[string]error{indexURL: errSECBlocked}}
-	now := time.Date(2026, time.October, 20, 12, 0, 0, 0, newYorkLocation())
+	downloader := &memoryDownloader{failures: map[string]error{testMasterDirectoryURL: errSECBlocked}}
+	now := time.Date(2026, time.October, 21, 12, 0, 0, 0, newYorkLocation())
 	scan := scanFilingIndexes(downloader, tickerUniverse{AllIssuers: true}, now, 7)
 	if !scan.Blocked || len(downloader.requests) != 1 || len(scan.Failures) != 1 {
 		t.Fatalf("scan continued after block: %+v, %v", scan, downloader.requests)
@@ -76,11 +78,12 @@ func TestTrackerPersistsEvidenceDeduplicatesAndWritesShortlist(t *testing.T) {
 	}
 	indexURL := secBase + "edgar/daily-index/2026/QTR4/master.20261020.idx"
 	downloader := &memoryDownloader{responses: map[string]string{
+		testMasterDirectoryURL:              testMasterDirectory,
 		indexURL:                            testMasterIndex,
 		secBase + "edgar/data/1/first.txt":  ownershipFixture("Buyer One", "2", "P", "6000", "10", "66000", "D", "0", "4"),
 		secBase + "edgar/data/1/second.txt": ownershipFixture("Buyer Two", "3", "P", "5000", "10", "55000", "D", "0", "4"),
 	}}
-	now := time.Date(2026, time.October, 20, 12, 0, 0, 0, newYorkLocation())
+	now := time.Date(2026, time.October, 21, 12, 0, 0, 0, newYorkLocation())
 	var output bytes.Buffer
 	for run := 0; run < 2; run++ {
 		if err := runTracker(map[string]string{}, cfg, downloader, now, &output); err != nil {
@@ -205,5 +208,71 @@ func TestRescanningLegacyRowsUsesVerifiedPlanFlag(t *testing.T) {
 	}
 	if _, qualified := evaluateLead("TEST", records); qualified {
 		t.Fatal("reprocessed planned purchase qualified")
+	}
+}
+
+func TestDailyDiscoveryDoesNotRequestUnpublishedCurrentDay(t *testing.T) {
+	currentIndex := secBase + "edgar/daily-index/2026/QTR4/master.20261022.idx"
+	completedIndex := secBase + "edgar/daily-index/2026/QTR4/master.20261021.idx"
+	downloader := &memoryDownloader{
+		responses: map[string]string{
+			completedIndex:         testMasterIndex,
+			testMasterDirectoryURL: `{"directory":{"item":[{"name":"master.20261021.idx"}]}}`,
+			secBase + "edgar/daily-index/2026/QTR3/index.json": `{"directory":{"item":[]}}`,
+		},
+		failures: map[string]error{currentIndex: errSECBlocked, secBase + "edgar/daily-index/2026/QTR4/master.20261012.idx": errSECBlocked},
+	}
+	now := time.Date(2026, time.October, 22, 12, 0, 0, 0, newYorkLocation())
+	scan := scanFilingIndexes(downloader, tickerUniverse{AllIssuers: true}, now, 21)
+	if scan.IndexCount != 1 || scan.Blocked || len(scan.Failures) != 0 {
+		t.Fatalf("current-day access denial prevented completed-day collection: %+v; requests=%v", scan, downloader.requests)
+	}
+	for _, requestedURL := range downloader.requests {
+		allowedURL := requestedURL == testMasterDirectoryURL || requestedURL == completedIndex || requestedURL == secBase+"edgar/daily-index/2026/QTR3/index.json"
+		if !allowedURL {
+			t.Fatal("discovery requested an unpublished index: " + requestedURL)
+		}
+	}
+}
+
+func TestDiscoveryAcceptsRealSECIndexHeader(t *testing.T) {
+	content, err := os.ReadFile("testdata/sec/master-20261020-excerpt.idx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexURL := secBase + "edgar/daily-index/2026/QTR4/master.20261020.idx"
+	downloader := &memoryDownloader{responses: map[string]string{testMasterDirectoryURL: testMasterDirectory, indexURL: string(content)}}
+	now := time.Date(2026, time.October, 21, 12, 0, 0, 0, newYorkLocation())
+	scan := scanFilingIndexes(downloader, tickerUniverse{AllIssuers: true}, now, 1)
+	if scan.IndexCount != 1 || len(scan.URLs) == 0 || len(scan.Failures) != 0 {
+		t.Fatalf("real index was rejected: %+v", scan)
+	}
+}
+
+func TestSECAccessCheckExercisesIndexAndFilingWithoutDatabaseWrites(t *testing.T) {
+	directory := t.TempDir()
+	falseValue := false
+	cfg := settings{TransactionsFile: filepath.Join(directory, "must-not-exist.db"), Debug: &falseValue}
+	indexURL := secBase + "edgar/daily-index/2026/QTR4/master.20261020.idx"
+	filingURL := secBase + "edgar/data/1/first.txt"
+	downloader := &memoryDownloader{responses: map[string]string{
+		testMasterDirectoryURL: testMasterDirectory,
+		indexURL:               testMasterIndex,
+		filingURL:              ownershipFixture("Buyer", "2", "P", "5000", "10", "55000", "D", "0", "4"),
+	}}
+	now := time.Date(2026, time.October, 21, 12, 0, 0, 0, newYorkLocation())
+	var output bytes.Buffer
+	if err := runTracker(map[string]string{"check-sec": "true"}, cfg, downloader, now, &output); err != nil {
+		t.Fatal(err)
+	}
+	if len(downloader.requests) != 3 || !strings.Contains(output.String(), "Filing download and ownership XML parsing OK") {
+		t.Fatalf("check did not exercise index and filing: %s, %v", output.String(), downloader.requests)
+	}
+	if _, err := os.Stat(cfg.TransactionsFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("access check touched transaction database: %v", err)
+	}
+	downloader.failures = map[string]error{filingURL: errSECBlocked}
+	if err := runTracker(map[string]string{"check-sec": "true"}, cfg, downloader, now, &output); !errors.Is(err, errSECBlocked) {
+		t.Fatalf("filing access failure was hidden: %v", err)
 	}
 }

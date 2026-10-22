@@ -449,7 +449,9 @@ func escapeJSON(value string) string {
 func main() {
 	opts := parseOptions(os.Args[1:])
 	cfg := loadSettings(firstNonBlank(opts["settings"], opts["config"]))
-	if err := runTracker(opts, cfg, secDownloader{}, time.Now(), os.Stdout); err != nil {
+	checkAccess := parseBool(opts["check-sec"], false)
+	downloader := secDownloader{Fresh: checkAccess}
+	if err := runTracker(opts, cfg, downloader, time.Now(), os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

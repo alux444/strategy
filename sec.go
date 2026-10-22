@@ -23,7 +23,7 @@ var downloadCacheDir = "history"
 var secUserAgent = defaultSECUserAgent
 var secContactEmail = defaultSECContactEmail
 var errHTTPNotFound = errors.New("HTTP 404")
-var errSECBlocked = errors.New("SEC blocked automated access")
+var errSECBlocked = errors.New("SEC access denied")
 
 func setSECRequestDelay(delay time.Duration) {
 	if delay < 0 {
@@ -57,9 +57,15 @@ func setSECIdentity(userAgent, contactEmail string) {
 }
 
 func downloadText(rawURL string) (string, error) {
-	if cached, ok := readDownloadCache(rawURL); ok {
-		logTrace("Cache hit: " + rawURL)
-		return cached, nil
+	return downloadSECText(rawURL, true)
+}
+
+func downloadSECText(rawURL string, useCache bool) (string, error) {
+	if useCache {
+		if cached, ok := readDownloadCache(rawURL); ok {
+			logTrace("Cache hit: " + rawURL)
+			return cached, nil
+		}
 	}
 
 	var lastErr error
@@ -103,18 +109,17 @@ func downloadText(rawURL string) (string, error) {
 				return "", fmt.Errorf("empty response from %s", rawURL)
 			}
 			if isSECRateLimitBody(string(body)) {
-				lastErr = fmt.Errorf("%w for %s (attempt %d)", errSECBlocked, rawURL, attempt)
-				sleepBeforeRetry(attempt, lastErr)
-				continue
+				return "", fmt.Errorf("%w for %s: %s", errSECBlocked, rawURL, secAccessReason(string(body)))
 			}
 			text := string(body)
-			writeDownloadCache(rawURL, text)
+			if useCache {
+				writeDownloadCache(rawURL, text)
+			}
 			return text, nil
 		case http.StatusNotFound:
 			return "", fmt.Errorf("%w for %s", errHTTPNotFound, rawURL)
 		case http.StatusForbidden, http.StatusTooManyRequests:
-			lastErr = fmt.Errorf("%w: HTTP %d for %s (attempt %d)", errSECBlocked, resp.StatusCode, rawURL, attempt)
-			sleepBeforeRetry(attempt, lastErr)
+			return "", fmt.Errorf("%w: HTTP %d for %s: %s", errSECBlocked, resp.StatusCode, rawURL, secAccessReason(string(body)))
 		default:
 			lastErr = fmt.Errorf("HTTP %d for %s (attempt %d)", resp.StatusCode, rawURL, attempt)
 			sleepBeforeRetry(attempt, lastErr)
@@ -124,6 +129,17 @@ func downloadText(rawURL string) (string, error) {
 		return "", lastErr
 	}
 	return "", fmt.Errorf("failed to download %s after %d attempts", rawURL, secRetryCount)
+}
+
+func secAccessReason(body string) string {
+	lower := strings.ToLower(body)
+	if strings.Contains(lower, "request rate threshold exceeded") {
+		return "SEC request-rate threshold exceeded"
+	}
+	if strings.Contains(lower, "undeclared automated tool") || strings.Contains(lower, "please declare your traffic") {
+		return "SEC rejected automated access; check the declared identity and access from this host"
+	}
+	return "SEC denied this URL; this response alone does not establish whether the resource is available or access from this host is restricted"
 }
 
 func readDownloadCache(rawURL string) (string, bool) {
