@@ -16,19 +16,25 @@ const defaultTransactionsFile = "history/insider_transactions.db"
 const defaultIngestLogFile = "db/ingest_runs.txt"
 
 type transactionRecord struct {
-	ID               string  `json:"id"`
-	ScanDate         string  `json:"scanDate"`
-	Ticker           string  `json:"ticker"`
-	OwnerName        string  `json:"ownerName"`
-	Position         string  `json:"position"`
-	Type             string  `json:"type"`
-	TransactionCode  string  `json:"transactionCode"`
-	TransactionDate  string  `json:"transactionDate"`
-	Shares           int64   `json:"shares"`
-	Price            float64 `json:"price"`
-	Amount           float64 `json:"amount"`
-	Is10b51          bool    `json:"is10b51"`
-	SharesOwnedAfter int64   `json:"sharesOwnedAfter"`
+	ID               string   `json:"id"`
+	ScanDate         string   `json:"scanDate"`
+	Ticker           string   `json:"ticker"`
+	OwnerName        string   `json:"ownerName"`
+	Position         string   `json:"position"`
+	Type             string   `json:"type"`
+	TransactionCode  string   `json:"transactionCode"`
+	TransactionDate  string   `json:"transactionDate"`
+	Shares           int64    `json:"shares"`
+	Price            float64  `json:"price"`
+	Amount           float64  `json:"amount"`
+	Is10b51          bool     `json:"is10b51"`
+	SharesOwnedAfter int64    `json:"sharesOwnedAfter"`
+	OwnerKey         string   `json:"ownerKey,omitempty"`
+	FilingURL        string   `json:"filingUrl,omitempty"`
+	IsAmendment      bool     `json:"isAmendment"`
+	JointReporting   bool     `json:"jointReporting"`
+	HoldingIncrease  *float64 `json:"holdingIncrease,omitempty"`
+	NewPosition      bool     `json:"newPosition"`
 }
 
 func appendTransactionRecords(filePath string, alertsByTicker map[string][]AlertEntry, scanDate string) (int, error) {
@@ -67,6 +73,9 @@ func appendTransactionRecords(filePath string, alertsByTicker map[string][]Alert
 	if _, err := db.Exec(create); err != nil {
 		return 0, err
 	}
+	if _, err := db.Exec(createTransactionEvidence); err != nil {
+		return 0, err
+	}
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -100,6 +109,10 @@ func appendTransactionRecords(filePath string, alertsByTicker map[string][]Alert
 				record.Type, record.TransactionCode, record.TransactionDate, record.Shares, record.Price,
 				record.Amount, is10, record.SharesOwnedAfter)
 			if err != nil {
+				tx.Rollback()
+				return written, err
+			}
+			if err := saveTransactionEvidence(tx, record); err != nil {
 				tx.Rollback()
 				return written, err
 			}
@@ -143,6 +156,12 @@ func buildTransactionRecord(ticker string, entry AlertEntry, scanDate string) tr
 		Amount:           entry.amount,
 		Is10b51:          entry.is10b51,
 		SharesOwnedAfter: entry.sharesOwnedAfter,
+		OwnerKey:         entry.ownerKey,
+		FilingURL:        entry.filingURL,
+		IsAmendment:      entry.isAmendment,
+		JointReporting:   entry.jointReporting,
+		HoldingIncrease:  entry.holdingIncrease,
+		NewPosition:      entry.newPosition,
 	}
 	record.ID = transactionRecordID(record)
 	return record

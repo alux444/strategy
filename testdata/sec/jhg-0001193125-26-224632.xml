@@ -1,0 +1,118 @@
+<ownershipDocument>
+
+    <schemaVersion>X0609</schemaVersion>
+
+    <documentType>4</documentType>
+
+    <periodOfReport>2026-05-12</periodOfReport>
+
+    <issuer>
+        <issuerCik>0001274173</issuerCik>
+        <issuerName>JANUS HENDERSON GROUP PLC</issuerName>
+        <issuerTradingSymbol>JHG</issuerTradingSymbol>
+        <issuerForeignTradingSymbol></issuerForeignTradingSymbol>
+    </issuer>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001422599</rptOwnerCik>
+            <rptOwnerName>Frank Joshua D.</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerNonUSAddressFlag>false</rptOwnerNonUSAddressFlag>
+            <rptOwnerStreet1>223 SUNSET AVENUE</rptOwnerStreet1>
+            <rptOwnerStreet2></rptOwnerStreet2>
+            <rptOwnerCity>PALM BEACH</rptOwnerCity>
+            <rptOwnerState>FL</rptOwnerState>
+            <rptOwnerZipCode>33480</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>true</isDirector>
+            <isOfficer>false</isOfficer>
+            <isTenPercentOwner>true</isTenPercentOwner>
+            <isOther>false</isOther>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001345471</rptOwnerCik>
+            <rptOwnerName>TRIAN FUND MANAGEMENT, L.P.</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerNonUSAddressFlag>false</rptOwnerNonUSAddressFlag>
+            <rptOwnerStreet1>280 PARK AVENUE</rptOwnerStreet1>
+            <rptOwnerStreet2>41ST FLOOR</rptOwnerStreet2>
+            <rptOwnerCity>NEW YORK</rptOwnerCity>
+            <rptOwnerState>NY</rptOwnerState>
+            <rptOwnerZipCode>10017</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>true</isDirector>
+            <isOfficer>false</isOfficer>
+            <isTenPercentOwner>true</isTenPercentOwner>
+            <isOther>false</isOther>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <aff10b5One>false</aff10b5One>
+
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-05-12</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>false</equitySwapInvolved>
+                <footnoteId id="F1"/>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>6213418</value>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>51.6001</value>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>25654382</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>Please see explanation below</value>
+                    <footnoteId id="F2"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+    </nonDerivativeTable>
+
+    <footnotes>
+        <footnote id="F1">The sale reported in this Form 4 was done for portfolio management purposes by certain funds (the &quot;Trian Funds&quot;) managed by Trian Fund Management, L.P. (&quot;Trian Management&quot;) which primarily hold publicly traded securities.  As contemplated by the Voting and Rollover Agreement dated as of December 21, 2025, entered into by and among the Issuer and the other parties thereto, an affiliate of Trian Management will roll over at least 24,750,000 shares of the Issuer in connection with the closing of the previously announced acquisition of the Issuer by Trian Management and its affiliated funds, and General Catalyst and its affiliated funds.  Progress toward closing is continuing, with the Issuer's shareholders approving the acquisition on April 16, 2026. The transaction is expected to close in mid-2026, subject to customary closing conditions, including receipt of applicable regulatory approvals and client consents.</footnote>
+        <footnote id="F2">Trian Management serves as the management company for the Trian Funds and as such determines the investment and voting decisions of the Trian Funds with respect to the shares of the Issuer which they hold. Mr. Frank is a member of the Investment Committee and a partner of Trian Management, and a limited partner or member of certain affiliates of the Trian Funds and as such has an indirect interest in the shares of the Issuer held by the Trian Funds. The Reporting Persons disclaim beneficial ownership of such shares except to the extent of their respective pecuniary interests therein and this report shall not be deemed an admission that the Reporting Persons are the beneficial owner of such securities for purposes of Section 16 or for any other purpose. Mr. Frank is a director of the Issuer.</footnote>
+    </footnotes>
+
+    <ownerSignature>
+        <signatureName>/s/ Daniel R. Marx, Attorney-In-Fact for Joshua D. Frank</signatureName>
+        <signatureDate>2026-05-14</signatureDate>
+    </ownerSignature>
+
+    <ownerSignature>
+        <signatureName>/s/ Peter W. May, member of the general partner of Trian Fund Management, L.P.</signatureName>
+        <signatureDate>2026-05-14</signatureDate>
+    </ownerSignature>
+</ownershipDocument>

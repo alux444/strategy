@@ -8,14 +8,14 @@ import (
 
 const (
 	defaultMainSECRequestDelayMS    = 1000
-	defaultMainSECRetryCount        = 1
+	defaultMainSECRetryCount        = 4
 	defaultMainSECRetryBackoffMS    = 5000
 	defaultMainSECRetryMaxBackoffMS = 120000
 )
 
 func configureSECFromSettings(opts map[string]string, cfg settings) {
-	secUserAgent := firstNonBlank(opts["sec-user-agent"], cfg.SECUserAgent, os.Getenv("SEC_USER_AGENT"), defaultSECUserAgent)
-	secContactEmail := firstNonBlank(opts["sec-contact-email"], cfg.SECContactEmail, os.Getenv("SEC_CONTACT_EMAIL"), defaultSECContactEmail)
+	secUserAgent := firstNonBlank(opts["sec-user-agent"], os.Getenv("SEC_USER_AGENT"), cfg.SECUserAgent, defaultSECUserAgent)
+	secContactEmail := firstNonBlank(opts["sec-contact-email"], os.Getenv("SEC_CONTACT_EMAIL"), cfg.SECContactEmail, defaultSECContactEmail)
 	setSECIdentity(secUserAgent, secContactEmail)
 
 	secRequestDelayMS := defaultMainSECRequestDelayMS

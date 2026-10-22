@@ -66,3 +66,8 @@ func newYorkLocation() *time.Location {
 	}
 	return loc
 }
+
+func newYorkDay(value time.Time) time.Time {
+	local := value.In(newYorkLocation())
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
+}

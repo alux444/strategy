@@ -23,6 +23,7 @@ var downloadCacheDir = "history"
 var secUserAgent = defaultSECUserAgent
 var secContactEmail = defaultSECContactEmail
 var errHTTPNotFound = errors.New("HTTP 404")
+var errSECBlocked = errors.New("SEC blocked automated access")
 
 func setSECRequestDelay(delay time.Duration) {
 	if delay < 0 {
@@ -102,7 +103,7 @@ func downloadText(rawURL string) (string, error) {
 				return "", fmt.Errorf("empty response from %s", rawURL)
 			}
 			if isSECRateLimitBody(string(body)) {
-				lastErr = fmt.Errorf("SEC rate limit response for %s (attempt %d)", rawURL, attempt)
+				lastErr = fmt.Errorf("%w for %s (attempt %d)", errSECBlocked, rawURL, attempt)
 				sleepBeforeRetry(attempt, lastErr)
 				continue
 			}
@@ -111,8 +112,8 @@ func downloadText(rawURL string) (string, error) {
 			return text, nil
 		case http.StatusNotFound:
 			return "", fmt.Errorf("%w for %s", errHTTPNotFound, rawURL)
-		case http.StatusForbidden, http.StatusTooManyRequests, http.StatusServiceUnavailable:
-			lastErr = fmt.Errorf("HTTP %d for %s (attempt %d)", resp.StatusCode, rawURL, attempt)
+		case http.StatusForbidden, http.StatusTooManyRequests:
+			lastErr = fmt.Errorf("%w: HTTP %d for %s (attempt %d)", errSECBlocked, resp.StatusCode, rawURL, attempt)
 			sleepBeforeRetry(attempt, lastErr)
 		default:
 			lastErr = fmt.Errorf("HTTP %d for %s (attempt %d)", resp.StatusCode, rawURL, attempt)
@@ -126,7 +127,7 @@ func downloadText(rawURL string) (string, error) {
 }
 
 func readDownloadCache(rawURL string) (string, bool) {
-	if strings.TrimSpace(downloadCacheDir) == "" {
+	if strings.TrimSpace(downloadCacheDir) == "" || mutableSECResource(rawURL) {
 		return "", false
 	}
 	contentPath, _ := downloadCachePaths(rawURL)
@@ -140,6 +141,12 @@ func readDownloadCache(rawURL string) (string, bool) {
 		return "", false
 	}
 	return string(content), true
+}
+
+func mutableSECResource(rawURL string) bool {
+	return strings.Contains(rawURL, "/daily-index/") ||
+		strings.Contains(rawURL, "/full-index/") ||
+		strings.Contains(rawURL, "/browse-edgar") || rawURL == tickerURL
 }
 
 func writeDownloadCache(rawURL, content string) {
@@ -192,7 +199,7 @@ func isSECRateLimitBody(body string) bool {
 }
 
 func findMasterIndex(startDate time.Time, maxLookbackDays int) *MasterIndex {
-	date := startDate.In(newYorkLocation()).Truncate(24 * time.Hour)
+	date := newYorkDay(startDate)
 	startDateOnly := date
 	thresholdDate := startDateOnly.AddDate(0, 0, -maxLookbackDays)
 	var combined strings.Builder
@@ -207,6 +214,7 @@ func findMasterIndex(startDate time.Time, maxLookbackDays int) *MasterIndex {
 			logDebug("Using SEC index: " + url)
 			logTrace(fmt.Sprintf("Master index fetched: date=%s size=%d", dateStr, len(content)))
 			combined.WriteString(content)
+			combined.WriteString("\n")
 			if foundDate.IsZero() {
 				foundDate = current
 			}
@@ -245,7 +253,8 @@ func parseMasterIdx(content string, ciks map[string]struct{}) []string {
 		if !isForm4Type(formType) {
 			continue
 		}
-		if _, ok := cleanCiks[fileCIK]; ok {
+		_, requested := cleanCiks[fileCIK]
+		if ciks == nil || requested {
 			filename := strings.TrimSpace(parts[4])
 			if filename != "" {
 				fullURL := secBase + filename
@@ -363,7 +372,7 @@ func parseBrowseEdgarAtom(atomXML string, endDate time.Time, maxLookbackDays int
 	urls := make([]string, 0)
 	seen := make(map[string]struct{})
 	ny := newYorkLocation()
-	end := endDate.In(ny).Truncate(24 * time.Hour)
+	end := newYorkDay(endDate.In(ny))
 	threshold := end.AddDate(0, 0, -maxLookbackDays)
 	entryPattern := regexp.MustCompile(`(?is)<entry>(.*?)</entry>`)
 	datePattern := regexp.MustCompile(`(?is)<filing-date>(.*?)</filing-date>`)

@@ -23,7 +23,7 @@ const (
 	defaultSECUserAgent    = "SEC-Insider-Bot AdminContact@example.com"
 	defaultSECContactEmail = "contact@example.com"
 	defaultMinimumUSD      = int64(500_000)
-	defaultMaxLookbackDays = 0
+	defaultMaxLookbackDays = 7
 	defaultDebug           = true
 	defaultSettingsFile    = "settings.json"
 )
@@ -52,53 +52,83 @@ var fallbackTickerMap = map[string]string{
 }
 
 func parseForm4(rawXML string, minimumUSD int64, cikToRequestedTicker map[string]string) (map[string][]AlertEntry, error) {
+	return parseForm4WithThresholds(rawXML, minimumUSD, minimumUSD, cikToRequestedTicker)
+}
+
+func parseForm4WithThresholds(rawXML string, minimumBuyUSD, minimumSellUSD int64, tickerByCIK map[string]string) (map[string][]AlertEntry, error) {
 	alerts := make(map[string][]AlertEntry)
 	xmlPayload := extractXMLPayload(rawXML)
-	if strings.TrimSpace(xmlPayload) == "" {
-		logDebug("Skipping file: Could not extract valid XML payload.")
-		return alerts, nil
-	}
 	if !strings.Contains(xmlPayload, "<ownershipDocument") {
-		logTrace("Skipping file: XML payload is not an ownershipDocument.")
+		return nil, fmt.Errorf("filing has no ownership XML")
+	}
+
+	var document ownershipDocument
+	if err := xml.Unmarshal([]byte(xmlPayload), &document); err != nil {
+		return nil, err
+	}
+	issuerCIK := firstNonBlank(document.Issuer.IssuerCIK.String(), document.Issuer.IssuerCIKAlt.String())
+	if len(tickerByCIK) > 0 && tickerByCIK[normalizeCIK(issuerCIK)] == "" {
+		return alerts, nil
+	}
+	ticker := normalizeTickerSymbol(firstNonBlank(tickerByCIK[normalizeCIK(issuerCIK)], document.Issuer.IssuerTradingSymbol))
+	if ticker == "" || ticker == "NONE" || ticker == "N-A" {
 		return alerts, nil
 	}
 
-	var doc ownershipDocument
-	if err := xml.Unmarshal([]byte(xmlPayload), &doc); err != nil {
-		return alerts, err
-	}
-
-	rawXMLCIK := firstNonBlank(doc.Issuer.IssuerCIK.String(), doc.Issuer.IssuerCIKAlt.String(), "Unknown")
-	normalizedXMLCIK := normalizeCIK(rawXMLCIK)
-	ticker := cikToRequestedTicker[normalizedXMLCIK]
-	if ticker == "" {
-		ticker = firstNonBlank(doc.Issuer.IssuerTradingSymbol, "Unknown")
-	}
-
-	if !isOfficerOrDirector(doc.ReportingOwner) {
-		logDebug("Skipping Form 4 for " + ticker + " - reporter is not an officer/director.")
+	owner, found := qualifyingOwner(document.ReportingOwners)
+	if !found {
 		return alerts, nil
 	}
-
-	ownerName := firstNonBlank(doc.ReportingOwner.ReportingOwnerID.RptOwnerName, "Unknown Owner")
-	position := extractPosition(doc.ReportingOwner)
-
-	if len(doc.NonDerivTable.Transactions) == 0 {
-		logDebug("No non-derivativeTable for " + ticker)
-		alerts[ticker] = []AlertEntry{}
+	ownerName := strings.TrimSpace(owner.ReportingOwnerID.RptOwnerName)
+	if ownerName == "" {
 		return alerts, nil
 	}
-
-	for _, tx := range doc.NonDerivTable.Transactions {
-		entry := processTransaction(tx, ownerName, position, minimumUSD)
-		if entry != nil {
-			alerts[ticker] = append(alerts[ticker], *entry)
+	for _, transaction := range document.NonDerivTable.Transactions {
+		minimumUSD := minimumSellUSD
+		if strings.TrimSpace(transaction.TransactionCoding.TransactionCode) == "P" {
+			minimumUSD = minimumBuyUSD
 		}
-	}
-	if _, ok := alerts[ticker]; !ok {
-		alerts[ticker] = []AlertEntry{}
+		entry := processTransaction(transaction, ownerName, extractPosition(owner), minimumUSD)
+		if entry == nil {
+			continue
+		}
+		entry.ownerKey = strings.TrimSpace(owner.ReportingOwnerID.RptOwnerCIK)
+		entry.is10b51 = entry.is10b51 || truthy(document.PlanTransaction)
+		entry.isAmendment = strings.EqualFold(strings.TrimSpace(document.DocumentType), "4/A")
+		entry.jointReporting = len(document.ReportingOwners) > 1
+		entry.holdingIncrease, entry.newPosition = purchaseCommitment(transaction)
+		alerts[ticker] = append(alerts[ticker], *entry)
 	}
 	return alerts, nil
+}
+
+func qualifyingOwner(owners []reportingOwner) (reportingOwner, bool) {
+	for _, owner := range owners {
+		if isOfficerOrDirector(owner) {
+			return owner, true
+		}
+	}
+	return reportingOwner{}, false
+}
+
+func purchaseCommitment(transaction nonDerivativeTransaction) (*float64, bool) {
+	isDirectPurchase := strings.TrimSpace(transaction.TransactionCoding.TransactionCode) == "P" &&
+		strings.EqualFold(strings.TrimSpace(transaction.OwnershipNature.DirectOrIndirect.String()), "D")
+	if !isDirectPurchase {
+		return nil, false
+	}
+	shares := extractFloat64(transaction.TransactionAmounts.TransactionShares.String())
+	afterText := firstNonBlank(transaction.PostTransactionAmounts.SharesOwnedFollowingTransaction.String(), transaction.SharesOwnedFollowingTxn.String())
+	after := extractFloat64(afterText)
+	if afterText == "" || shares <= 0 || after < shares {
+		return nil, false
+	}
+	before := after - shares
+	if before == 0 {
+		return nil, true
+	}
+	increase := shares / before
+	return &increase, false
 }
 
 func isOfficerOrDirector(ro reportingOwner) bool {
@@ -131,11 +161,17 @@ func extractPosition(ro reportingOwner) string {
 	appendIfPresent("officerTitle")
 	appendIfPresent("directorTitle")
 	appendIfPresent("otherTitle")
+	if truthy(rel.IsDirector) && !hasDirectorPosition(strings.Join(titles, ", ")) {
+		titles = append(titles, "Director")
+	}
 	if len(titles) > 0 {
 		return strings.Join(titles, ", ")
 	}
 	if strings.TrimSpace(ro.ReportingOwnerID.RptOwnerTitle) != "" {
 		return strings.TrimSpace(ro.ReportingOwnerID.RptOwnerTitle)
+	}
+	if truthy(rel.IsOfficer) {
+		return "Officer"
 	}
 	return "Unknown Position"
 }
@@ -410,150 +446,11 @@ func escapeJSON(value string) string {
 	return value
 }
 
-// helper functions moved to helpers.go
-
 func main() {
 	opts := parseOptions(os.Args[1:])
-	settingsFile := firstNonBlank(opts["settings"], opts["config"], "")
-	cfg := loadSettings(settingsFile)
-	configureSECFromSettings(opts, cfg)
-
-	// Determine tickers
-	tickersArg := firstNonBlank(opts["tickers"], joinTickers(cfg.Tickers))
-	var tickers []string
-	if tickersArg != "" {
-		tickers = parseTickers(tickersArg)
-	} else if filePath := firstNonBlank(opts["holdings-file"], cfg.HoldingsFile); filePath != "" {
-		loaded, err := readTickersFromCSV(filePath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to load holdings file %s: %v\n", filePath, err)
-			os.Exit(1)
-		}
-		tickers = loaded
-	}
-	if len(tickers) == 0 {
-		fmt.Fprintln(os.Stderr, "No tickers configured. Use --tickers, settings.json tickers, or holdingsFile.")
-		os.Exit(1)
-	}
-	fmt.Println("Loaded " + strconv.Itoa(len(tickers)) + " tickers to monitor.")
-
-	// Debug flags
-	if cfg.Debug != nil {
-		setDebug(*cfg.Debug)
-	}
-	if v, ok := opts["verbose"]; ok && (v == "true" || v == "1") {
-		setVerbose(true)
-	} else if cfg.Verbose != nil {
-		setVerbose(*cfg.Verbose)
-	}
-
-	// Thresholds
-	minimumUSD := defaultMinimumUSD
-	if cfg.ThresholdUSD != nil {
-		minimumUSD = *cfg.ThresholdUSD
-	}
-	if v, ok := opts["minusd"]; ok && v != "" {
-		if parsed := parseInt64(v, minimumUSD); parsed > 0 {
-			minimumUSD = parsed
-		}
-	}
-
-	lookback := defaultMaxLookbackDays
-	if cfg.LookbackDays != nil {
-		lookback = *cfg.LookbackDays
-	}
-	if v, ok := opts["lookback"]; ok && v != "" {
-		if p := parseInt(v, lookback); p >= 0 {
-			lookback = p
-		}
-	}
-
-	tickerMap, err := mainTickerMapping(opts, cfg)
-	if err != nil {
+	cfg := loadSettings(firstNonBlank(opts["settings"], opts["config"]))
+	if err := runTracker(opts, cfg, secDownloader{}, time.Now(), os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	ciks := make(map[string]struct{})
-	cikToRequested := make(map[string]string)
-	for _, t := range tickers {
-		cik := findCIKForTicker(t, tickerMap)
-		if cik == "" {
-			logTrace("No CIK found for ticker: " + t)
-			continue
-		}
-		normalized := normalizeCIK(cik)
-		ciks[normalized] = struct{}{}
-		cikToRequested[normalized] = t
-	}
-
-	if len(ciks) == 0 {
-		fmt.Fprintln(os.Stderr, "No valid CIKs found for provided tickers.")
-		os.Exit(1)
-	}
-
-	// Try master index first
-	start := time.Now().In(newYorkLocation())
-	master := findMasterIndex(start, lookback)
-	var formURLs []string
-	if master != nil {
-		formURLs = parseMasterIdx(master.content, ciks)
-	}
-	if len(formURLs) == 0 {
-		// Fallback to browse-edgar
-		formURLs = fetchForm4URLsFromEdgarBrowse(ciks, time.Now().In(newYorkLocation()), lookback)
-	}
-
-	alertsByTicker := make(map[string][]AlertEntry)
-	for _, u := range formURLs {
-		content, err := downloadText(u)
-		if err != nil {
-			logTrace(fmt.Sprintf("Failed to download %s: %v", u, err))
-			continue
-		}
-		parsed, err := parseForm4(content, minimumUSD, cikToRequested)
-		if err != nil {
-			logTrace(fmt.Sprintf("Failed to parse Form4 from %s: %v", u, err))
-			continue
-		}
-		for k, v := range parsed {
-			if _, ok := alertsByTicker[k]; !ok {
-				alertsByTicker[k] = []AlertEntry{}
-			}
-			alertsByTicker[k] = append(alertsByTicker[k], v...)
-		}
-	}
-
-	transactionsFile := firstNonBlank(opts["transactions-file"], opts["db"], cfg.TransactionsFile, defaultTransactionsFile)
-	written, err := appendTransactionRecords(transactionsFile, alertsByTicker, todayScanDate())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to record transactions: %v\n", err)
-	} else {
-		logDebug(fmt.Sprintf("Recorded %d new transactions to %s", written, transactionsFile))
-		ingestLogFile := firstNonBlank(opts["ingest-log-file"], cfg.IngestLogFile, defaultIngestLogFile)
-		if logErr := appendIngestRunLog(ingestLogFile, written, transactionsFile); logErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to append ingest log: %v\n", logErr)
-		}
-	}
-
-	notify := true
-	if cfg.Notify != nil {
-		notify = *cfg.Notify
-	}
-	if v := firstNonBlank(opts["notify"], ""); v != "" {
-		notify = parseBool(v, notify)
-	}
-	if !notify {
-		return
-	}
-
-	// Build and send notification
-	indexDate := time.Now().In(newYorkLocation()).Format("2006-01-02")
-	// Order tickers as provided
-	message := buildGroupedNotification(alertsByTicker, tickers, indexDate)
-	if strings.TrimSpace(message) == "" {
-		miss := buildMissingNotification(tickers, "No large insider transactions found")
-		sendNotification(miss)
-		os.Exit(0)
-	}
-	sendNotification(message)
 }

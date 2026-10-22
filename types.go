@@ -16,6 +16,12 @@ type AlertEntry struct {
 	is10b51          bool
 	transactionDate  string
 	sharesOwnedAfter int64
+	ownerKey         string
+	filingURL        string
+	isAmendment      bool
+	jointReporting   bool
+	holdingIncrease  *float64
+	newPosition      bool
 }
 
 type MasterIndex struct {
@@ -42,6 +48,9 @@ type settings struct {
 	Debug                *bool    `json:"debug"`
 	Verbose              *bool    `json:"verbose"`
 	SettingsFile         string   `json:"-"`
+	AllIssuers           *bool    `json:"allIssuers"`
+	MinimumBuyUSD        *int64   `json:"minimumBuyUsd"`
+	LeadsFile            string   `json:"leadsFile"`
 }
 
 type flexibleText string
@@ -68,10 +77,12 @@ func (f flexibleText) String() string {
 
 // Ownership document structures
 type ownershipDocument struct {
-	XMLName        xml.Name       `xml:"ownershipDocument"`
-	Issuer         issuer         `xml:"issuer"`
-	ReportingOwner reportingOwner `xml:"reportingOwner"`
-	NonDerivTable  nonDerivTable  `xml:"nonDerivativeTable"`
+	XMLName         xml.Name         `xml:"ownershipDocument"`
+	Issuer          issuer           `xml:"issuer"`
+	ReportingOwners []reportingOwner `xml:"reportingOwner"`
+	NonDerivTable   nonDerivTable    `xml:"nonDerivativeTable"`
+	PlanTransaction string           `xml:"aff10b5One"`
+	DocumentType    string           `xml:"documentType"`
 }
 
 type issuer struct {
@@ -86,6 +97,7 @@ type reportingOwner struct {
 }
 
 type reportingOwnerID struct {
+	RptOwnerCIK   string `xml:"rptOwnerCik"`
 	RptOwnerName  string `xml:"rptOwnerName"`
 	RptOwnerTitle string `xml:"rptOwnerTitle"`
 }
@@ -109,6 +121,11 @@ type nonDerivativeTransaction struct {
 	SecurityTitle           flexibleText           `xml:"securityTitle"`
 	PostTransactionAmounts  postTransactionAmounts `xml:"postTransactionAmounts"`
 	SharesOwnedFollowingTxn flexibleText           `xml:"sharesOwnedFollowingTransaction"`
+	OwnershipNature         ownershipNature        `xml:"ownershipNature"`
+}
+
+type ownershipNature struct {
+	DirectOrIndirect flexibleText `xml:"directOrIndirectOwnership"`
 }
 
 type transactionCoding struct {
