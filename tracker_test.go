@@ -122,6 +122,63 @@ func TestTrackerPersistsEvidenceDeduplicatesAndWritesShortlist(t *testing.T) {
 	if len(downloader.requests) != beforeRequests {
 		t.Fatal("report-only made HTTP requests")
 	}
+
+	archivePaths, err := filepath.Glob(filepath.Join(directory, "leads-history", "*.json"))
+	if err != nil || len(archivePaths) != 3 {
+		t.Fatalf("expected three distinct snapshots across four runs: %v, %v", archivePaths, err)
+	}
+	archivedStatuses := make(map[leadCollectionStatus]bool)
+	for _, archivePath := range archivePaths {
+		content, err := os.ReadFile(archivePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var snapshot leadReport
+		if err := json.Unmarshal(content, &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		if len(snapshot.Leads) != 1 || len(snapshot.Leads[0].Purchases) == 0 || snapshot.Leads[0].Purchases[0].FilingURL == "" {
+			t.Fatalf("snapshot lost the lead or its evidence: %s", content)
+		}
+		if snapshot.CollectionStatus == collectionPartial && len(snapshot.CollectionWarnings) != 1 {
+			t.Fatalf("snapshot lost its collection warning: %s", content)
+		}
+		archivedStatuses[snapshot.CollectionStatus] = true
+	}
+	if !archivedStatuses[collectionComplete] || !archivedStatuses[collectionPartial] || !archivedStatuses[collectionReportOnly] {
+		t.Fatalf("archive lost a run status: %v", archivedStatuses)
+	}
+}
+
+func TestSaveLeadReportPreservesPreexistingSnapshot(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "shortlist.json")
+	previous := []byte(`{"generatedAt":"2026-11-22T09:00:00Z","windowEnd":"2026-11-22","leads":[{"ticker":"STWD"}]}`)
+	if err := os.WriteFile(path, previous, 0600); err != nil {
+		t.Fatal(err)
+	}
+	archivePath, err := saveLeadReport(path, leadReport{
+		GeneratedAt: time.Date(2026, time.November, 23, 9, 0, 0, 0, time.UTC),
+		WindowEnd:   "2026-11-23",
+		Leads:       []investmentLead{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	historyDirectory := filepath.Join(directory, "shortlist-history")
+	previousPaths, err := filepath.Glob(filepath.Join(historyDirectory, "2026-11-22T*.json"))
+	if err != nil || len(previousPaths) != 1 {
+		t.Fatalf("existing report was not archived: %v, %v", previousPaths, err)
+	}
+	archivedPrevious, err := os.ReadFile(previousPaths[0])
+	if err != nil || !bytes.Equal(archivedPrevious, previous) {
+		t.Fatalf("existing report changed during archiving: %s, %v", archivedPrevious, err)
+	}
+	latest, latestError := os.ReadFile(path)
+	archivedLatest, archiveError := os.ReadFile(archivePath)
+	if latestError != nil || archiveError != nil || !bytes.Equal(latest, archivedLatest) || bytes.Equal(latest, previous) {
+		t.Fatalf("latest did not match the new snapshot: %s; %s; %v; %v", latest, archivedLatest, latestError, archiveError)
+	}
 }
 
 func TestLegacyDatabaseReadIsReadOnlyAndDoesNotInventEvidence(t *testing.T) {

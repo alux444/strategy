@@ -1,11 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -21,13 +18,19 @@ func runTracker(opts map[string]string, cfg settings, downloader filingDownloade
 		return checkSECAccess(downloader, now, output)
 	}
 	databasePath := firstNonBlank(opts["transactions-file"], opts["db"], cfg.TransactionsFile, defaultTransactionsFile)
+	reportOnly := parseBool(opts["report-only"], false)
 	failures := []string{}
-	if !parseBool(opts["report-only"], false) {
+	collectionStatus := collectionReportOnly
+	if !reportOnly {
 		collectedFailures, err := ingestTransactions(opts, cfg, downloader, now, output, databasePath)
 		if err != nil {
 			return err
 		}
 		failures = collectedFailures
+		collectionStatus = collectionComplete
+		if len(failures) > 0 {
+			collectionStatus = collectionPartial
+		}
 	}
 
 	report, err := buildLeadReport(sqliteTransactionReader{Path: databasePath}, now)
@@ -35,19 +38,21 @@ func runTracker(opts map[string]string, cfg settings, downloader filingDownloade
 		return fmt.Errorf("build lead report: %w", err)
 	}
 	report.CollectionWarnings = failures
+	report.CollectionStatus = collectionStatus
 	reportPath := firstNonBlank(opts["leads-file"], cfg.LeadsFile, defaultLeadsFile)
-	if err := saveLeadReport(reportPath, report); err != nil {
+	archivePath, err := saveLeadReport(reportPath, report)
+	if err != nil {
 		return fmt.Errorf("save lead report: %w", err)
 	}
 	summary := renderLeadSummary(report)
-	if _, err := fmt.Fprintln(output, summary+"\nFull report: "+reportPath); err != nil {
+	if _, err := fmt.Fprintf(output, "%s\nFull report: %s\nArchived report: %s\n", summary, reportPath, archivePath); err != nil {
 		return err
 	}
 	if len(failures) > 0 {
 		return fmt.Errorf("collection incomplete: %d failures; see collectionWarnings in %s", len(failures), reportPath)
 	}
 	notify := cfg.Notify != nil && *cfg.Notify
-	if parseBool(opts["notify"], notify) && !parseBool(opts["report-only"], false) && len(report.Leads) > 0 {
+	if parseBool(opts["notify"], notify) && !reportOnly && len(report.Leads) > 0 {
 		sendNotification(summary)
 	}
 	return nil
@@ -129,29 +134,6 @@ func ingestTransactions(opts map[string]string, cfg settings, downloader filingD
 		}
 	}
 	return failures, nil
-}
-
-func saveLeadReport(path string, report leadReport) error {
-	content, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".leads-*.json")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(temporary.Name())
-	if _, err := temporary.Write(append(content, '\n')); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporary.Name(), path)
 }
 
 func renderLeadSummary(report leadReport) string {

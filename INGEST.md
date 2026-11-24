@@ -47,6 +47,19 @@ go run .
 
 With the checked-in settings, transactions go to `db/insider_transactions.db`, successful collection summaries to `db/ingest_runs.txt`, and the JSON shortlist to `history/leads.json`. A text shortlist is also printed. Notifications remain disabled; enabling `notify` sends the shortlist through the existing notification path.
 
+Each report also gets a timestamped JSON snapshot in `history/leads-history/`. The first report after updating archives any existing `leads.json` before replacing it. The filename timestamp is UTC. Each snapshot includes the New York scoring window, the flagged tickers, their scores and reasons, and the transactions and filing links. The `collectionStatus` field identifies normal, partial, and report-only runs. The first archived report from an older binary may lack that field. Older overwritten reports are available as summaries in any retained run logs.
+
+List saved reports with `ls -1 history/leads-history/`. To find when a ticker appeared, use `jq` with the ticker you want:
+
+```sh
+jq -r --arg ticker STWD '
+  . as $report | .leads[] | select(.ticker == $ticker) |
+  [$report.windowEnd, $report.generatedAt, .ticker, .score, .purchaseUsd] | @tsv
+' history/leads-history/*.json
+```
+
+`--leads-file` places the archive beside the chosen output file. For example, `--leads-file history/shortlist.json` uses `history/shortlist-history/`.
+
 To generate a report from the existing database without downloads or database writes:
 
 ```sh

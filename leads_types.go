@@ -23,14 +23,23 @@ type transactionReader interface {
 	ReadTransactions(startDate, endDate string) ([]transactionRecord, error)
 }
 
+type leadCollectionStatus string
+
+const (
+	collectionComplete   leadCollectionStatus = "complete"
+	collectionPartial    leadCollectionStatus = "partial"
+	collectionReportOnly leadCollectionStatus = "report-only"
+)
+
 type leadReport struct {
-	GeneratedAt         time.Time        `json:"generatedAt"`
-	WindowStart         string           `json:"windowStart"`
-	WindowEnd           string           `json:"windowEnd"`
-	Leads               []investmentLead `json:"leads"`
-	Limitations         []string         `json:"limitations"`
-	CollectionWarnings  []string         `json:"collectionWarnings"`
-	UnverifiedPurchases int              `json:"unverifiedPurchases"`
+	GeneratedAt         time.Time            `json:"generatedAt"`
+	WindowStart         string               `json:"windowStart"`
+	WindowEnd           string               `json:"windowEnd"`
+	Leads               []investmentLead     `json:"leads"`
+	Limitations         []string             `json:"limitations"`
+	CollectionStatus    leadCollectionStatus `json:"collectionStatus,omitempty"`
+	CollectionWarnings  []string             `json:"collectionWarnings"`
+	UnverifiedPurchases int                  `json:"unverifiedPurchases"`
 }
 
 type investmentLead struct {
